@@ -236,7 +236,18 @@ try {
 
 check('apply(ctx, config) 不拋錯', applyError === null, applyError ? String(applyError?.stack || applyError).slice(0, 400) : '');
 check('导出 name === "web-watch"（跟 cordis.patch.yml 的 id 一致）', mod?.name === 'web-watch', String(mod?.name));
-check('导出 Config（schemastery 拿得到时）', mod?.Config !== undefined, mod?.Config === undefined ? '降級：沒有 Config，插件本體照常跑' : '有');
+// ⚠️ 2026-10-27 CI 修正：`@deepseek-ai/schemastery` 是可選 peer dep ——
+//    CI 不裝它，插件本來就該走「沒有 Config 也照常跑」的降級路徑。
+//    偵測方式必須跟插件自己一樣（走 hostdeps 從宿主樹找），不能用本模組的 import
+//    —— 否則在「有 DSH 家目錄但沒有本地 node_modules」的環境會誤判。
+const { loadHostDeps } = await import(pathToFileURL(join(PLUGIN_DIR, 'lib', 'hostdeps.mjs')).href);
+const hostZ = await loadHostDeps();
+const hostHasZ = Boolean(hostZ?.z);
+check(
+  '导出 Config 與宿主 schemastery 一致（有就導出、沒有就走降級）',
+  hostHasZ ? mod?.Config !== undefined : mod?.Config === undefined,
+  `hostZ=${hostHasZ} Config=${mod?.Config !== undefined}`,
+);
 
 const toolNames = (ctxState?.tools || []).map((spec) => spec?.name).sort();
 const wantedTools = ['web_watch_config', 'web_watch_pull', 'web_watch_read', 'web_watch_sources', 'web_watch_status'];
@@ -667,10 +678,17 @@ for (const item of concBoot.made.state.effects) {
 
 /* ────────────────────── ③.8 P1 CLI：三層優先級 + 一次性遷移 ────────────────────── */
 
-console.log('\n=== ③.8 P1 CLI：config.json → sources.json（一次性遷移）→ defaults ===');
-
+// ⚠️ 2026-10-27 CI 修正：P1 CLI 是工作區的參照實作，住在插件目錄的**兄弟目錄** web-watch/。
+//    repo 檢出（GitHub Actions）時那裡什麼都沒有 —— 這不是缺陷，跳過即可，別讓 CI 紅。
 const cliSrcDir = join(PLUGIN_DIR, '..', 'web-watch');
-check('P1 CLI 在旁邊的 web-watch/（工作區）', existsSync(join(cliSrcDir, 'pull.mjs')), cliSrcDir);
+const hasP1Cli = existsSync(join(cliSrcDir, 'pull.mjs'));
+
+if (!hasP1Cli) {
+  console.log('\n=== ③.8 P1 CLI：跳過（旁邊沒有 web-watch/；repo 檢出時屬正常） ===');
+} else {
+  console.log('\n=== ③.8 P1 CLI：config.json → sources.json（一次性遷移）→ defaults ===');
+
+  check('P1 CLI 在旁邊的 web-watch/（工作區）', true, cliSrcDir);
 
 const cliHome = mkdtempSync(join(tmpdir(), 'web-watch-smoke-cli-'));
 copyFileSync(join(cliSrcDir, 'pull.mjs'), join(cliHome, 'pull.mjs'));
@@ -758,7 +776,8 @@ check(
     /\[schedule\] 09:00 \/ 24h \/ Asia\/Macau（來源：defaults）/.test(cliRun3.stdout) &&
     !existsSync(join(cliHome, 'config.json')),
   cliRun3.stdout.split('\n').find((line) => line.startsWith('[schedule]')) || '(沒有 schedule 行)',
-);
+  );
+}
 
 /* ────────────────────── ⑤ 源健康與熔斷（C，離線） ────────────────────── */
 
