@@ -14,8 +14,11 @@ jobs:
         with:
           node-version: '22'
 
-      - name: 離線煙霧測試（61 項，不打網路）
+      - name: 離線煙霧測試（66 項，不打網路 / 不含 P1 CLI 7 項）
         run: node scripts/smoke.mjs --offline
+
+      - name: SSRF 案例表（注入 resolve，零真 DNS）
+        run: node probe/safeurl-cases.mjs
 
       - name: 抽取器評測（fixtures，離線）
         run: node probe/extract-eval.mjs

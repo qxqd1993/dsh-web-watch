@@ -216,7 +216,9 @@ web_watch_read  { url: "https://…", source?: "euobserver" }
   → 读**一条**链接的正文：抓 HTML → 抽正文 → 全文存 pages/read/，只回
     { ok, url, title, chars, ratio, tier, excerpt, savedTo }，excerpt ≤ 400 字（全文不进模型）
   → 失败回 { ok:false, code, reason }，code ∈ blocked / unreachable / not-html / too-large / rate-limited
-  → 硬限制：只收 https、一次一条、timeout 15s、≤ 5MB、redirect ≤ 5、同 host 间隔 ≥ 1s、每分钟最多 3 次
+    / unsafe-url（**0.1.9 新增**：目标是私有 / loopback / link-local / `.local` 这类地址，见「安全边界」）
+  → 硬限制：只收 https、只读公开地址、一次一条、timeout 15s、≤ 5MB、redirect ≤ 5（逐跳检查）、
+    同 host 间隔 ≥ 1s、每分钟最多 3 次
   → source 可选，只校验这个 id 在源清单里（不改变抓取与文件名）
 
 web_watch_config  { patch?: { enabled, startAt, intervalHours, targetSession, ownerName } }
@@ -253,6 +255,51 @@ web_watch_sources  { action?: "list"|"add"|"update"|"remove", source?, id? }
 - 网络失败一律吞成「抓不到」`{reason, failures+1, failStreak+1}`，**不冒到定时器 / 不冒到宿主**：
   定时器回呼整个包在 `try/catch` 里（未捕获异常会杀掉整个宿主进程，这是 bili 那边血泪写下的规矩）。
 
+### 安全边界：SSRF（0.1.9）
+
+插件跑在**宿主进程**里，`fetch` 有完整网络权限。0.1.9 之前所有抓取都接受任意 https URL
+⇒ 一个被投毒的 feed 就能把 `http://169.254.169.254/latest/meta-data/`、`https://10.0.0.5/`、
+`https://127.0.0.1:8443/` 这类地址拉进 digest（内容还会进模型上下文）。现在**默认拒绝**：
+
+- 只收 `https:`；端口只能是 **443**（或省略）；URL 不带账号密码；
+- **IP 字面值直接判**，以下一律拒：loopback（`127.0.0.0/8`、`::1`）、
+  link-local（`169.254.0.0/16`、`fe80::/10`，含各云厂商的 metadata 地址）、
+  私有（`10/8`、`172.16/12`、`192.168/16`、`fc00::/7`）、`0.0.0.0`、CGNAT（`100.64/10`，含阿里云 metadata）、
+  组播 / 保留段（`224/4`、`240/4`、`ff00::/8`）、文档用段（`192.0.2/24`、`198.51.100/24`、`203.0.113/24`、`2001:db8::/32`）、
+  IPv4-mapped / NAT64 里嵌的私有 IPv4（`::ffff:127.0.0.1` 这类包装也挡）；
+  **内嵌 IPv4 的隧道段**（2026-10-27 对抗测试后补上）：6to4（`2002::/16`）、Teredo（`2001:0::/32`）、
+  benchmarking（`2001:2::/48`）、discard（`100::/64`）、local-use NAT64（`64:ff9b:1::/48`）
+  —— 这些都能经中继把请求带进内网，标准 SSRF 清单都要求拒绝；
+- 主机名等于 `localhost` 或以 `.local` / `.internal` / `.localhost` 结尾 → 拒（`localhost.` 尾端点也挡）；
+- 其余主机名 → `dns.lookup(host, { all: true })` **解析出所有 A/AAAA**，任何一条落在上面那些段就拒
+  （防「公开域名指向内网」）；解析失败 / 5s 超时 → `dns-failed`；
+- **重定向逐跳检查**：`web_watch_read` 与定时抓源都自己跟 redirect（`redirect: 'manual'`，≤ 5 跳），
+  每一跳重新判定，所以「公开 URL → 302 内网」在**发请求之前**就被挡下；最后再核对一次 `response.url` 的 host；
+- **判定结果不缓存**（避免把「上次解析是公开的」带进请求路径，把 rebinding 窗口拉长）。
+
+三个入口全部必经，不是只挡工具那一层：
+
+| 入口 | 文件 | 行为 |
+| --- | --- | --- |
+| `web_watch_read` | `lib/readpage.mjs` | 抓取前 + 每一跳 redirect + 最终 `response.url` 都检查；命中回 `{ok:false, code:"unsafe-url"}` |
+| 定时抓源 / `web_watch_pull` | `lib/engine/run.mjs` | 主 URL 与**每一个** `fallbacks` 都检查；不合格 ⇒ 该端点跳过、`failure.code = "unsafe-url"`、照常计 `failures` / `failStreak`；redirect 逐跳检查 |
+| 源清单校验（配置阶段） | `lib/engine/loader.mjs` | `normalizeSource` 直接拒私有 / 本机**字面值**（含 `fallbacks`）。这里**故意不解析 DNS** —— 配置校验不能变成阻塞的网络请求，域名那半留给抓取时做 |
+
+`code: "unsafe-url"` 是 0.1.9 的**新增**枚举值；`http://` / 非法 URL / 解析失败仍回原来的 `unreachable`
+（不偷偷改既有语义）。
+
+**未解的殘餘風險（本版故意不做）**：
+
+1. **DNS rebinding**：我们解析的地址与 `fetch` 实际连接的地址是**两次独立解析**，中间可能被换掉
+   （TTL=0 的域名可以「第一次答公开、第二次答 `127.0.0.1`」）。这是本层防不住的那个洞。
+   正解是 **pinned-IP**：解析一次 → 用那个 IP 建连接、SNI / `Host` 照旧（要改用 `node:https` + 自定义
+   `lookup`，或自建连接池后校验 `socket.remoteAddress`），还要处理 TLS 校验与 IPv6 —— 工程量另计，
+   不在 0.1.9。**本版的定位是「挡掉误配置与低成本的 SSRF」**，不是「对抗能控制 DNS 的对手」。
+2. **判定与连接之间的时间窗**（同上，是同一个洞的另一面；不缓存只能缩小它，不能消除）。
+3. **没有出口防火墙 / 网络层限制**：插件在宿主进程里跑，真正的最后一道防线应该在网络层
+   （VPC / 安全组 / egress 白名单）。本层只是应用层的第一道闸。
+4. 端口与协议被钉死在 https:443：某些自建 feed 用 `:8080` 会被拒 —— 这是**有意的**取舍（少一个洞）。
+
 ---
 
 ## 7. 自检 / 烟雾测试（不需要 DSH）
@@ -274,10 +321,20 @@ node scripts/smoke.mjs --offline
 - 家目录铺好 `sources.json`，默认源都在，`schedule` 默认 `24h / 09:00 / Asia/Macau`；
 - `tick` 真的用 60 秒注册了、手动触发一次**不抛错**（用「预置 index.json 让它 not-due」的方式避开网络）；
 - 设置页那条通道 `GET/POST /api/web-watch/*`：能读、能存、能读回，**`http://` / `kind=nope` / `startAt=25:00` / `intervalHours=0` 全被拒**；
+  往 `POST /sources` 塞内网 URL 也会被拒、**不会写进 `sources.json`**；
 - **`web_watch_read`**：拒 `http://`、非法 URL、不存在的 URL（`unreachable`）、不存在的 `source`；
   真网络读一条 euobserver（`tier=full`、`chars>800`），**回传 JSON 只有摘要**（`excerpt ≤ 400`、
   `savedTo` 在家目录内、存档是 `# 标题` + source 行 + 正文）；假 fetch 验 `not-html` / `too-large` / `403 blocked` /
   每分钟第 4 次 `rate-limited`；
+- **SSRF（0.1.9，`--offline` 也全覆盖，零真 DNS）**：`probe/safeurl-cases.mjs` 的 30 条案例表
+  （`http://` / 帐密 / 非 443 端口 / `127.0.0.1` / `[::1]` / `169.254.169.254` / `10.x` / `172.20.x` / `192.168.x` /
+  `0.0.0.0` / `localhost` / `foo.local` / 公开域名→公开 IP / 公开域名→`192.168.1.1` / 解析失败 / 十进位与
+  十六进位写法的 `127.0.0.1` / `::ffff:` 包装 / 对照组…）全部符合期望；端到端三条：
+  `web_watch_read` 对 `https://169.254.169.254/…` 与工具入口 `https://127.0.0.1/` 回 `unsafe-url`
+  **且一个请求都没发**、源配置含私有 / `localhost` / 内网 `fallbacks` 被 `ConfigError` 拒、
+  假 fetch 模拟 `302 → 169.254.169.254` 时只发出 1 个请求就被挡；
+  引擎端：私有源 ⇒ `failure.code="unsafe-url"` + `failStreak=1` + 0 请求、`302` 到内网只发 1 个请求、
+  不安全主 URL + 安全 fallback ⇒ 换端点后成功；
 - **熔断（C）**：`failStreak=3` 时 digest 出现 `## ⚠ 注意` 且排在 `## 變動` 之前，`failStreak=2` 时整节不出现；
   fallback 第 2 个端成功 ⇒ `failedSources=0`、`failures=0`、`failStreak=0`；两个都失败 ⇒
   原因带「試過 2 個端點」；`fallbacks` 里的 `http://` 被配置校验拒绝；
@@ -289,7 +346,14 @@ node scripts/smoke.mjs --offline
   `persistCfg` 与 `saveSources` **并发**触发后，`config.json` 与 `sources.json.schedule` 一致且源不丢；
 - **P1 CLI 三層**（`web-watch/pull.mjs`，真实子进程跑 `--tick`）：只有 sources 09:00 ⇒ 迁进 `config.json` 并 log；
   再把 sources 改 08:00 ⇒ 仍用 config 的 **09:00**（退役）；两边都没有 ⇒ `defaults`。
-  离线 `61/61 ok`；带真网络 `78/78 ok`（原有 57 项不退化）。
+  离线 `73/73 ok`；带真网络 `90/90 ok`（0.1.8 的 61 / 78 项一条没退化）；
+  repo 检出布局（没有兄弟 `web-watch/`）离线 `66/66 ok`（7 项 P1 CLI 测试跳过）。
+
+SSRF 案例表也能单独跑（**不打真 DNS、不碰外网**，会印出 URL / 期望 / 实际 / 原因四栏）：
+
+```powershell
+node probe/safeurl-cases.mjs
+```
 
 正文抽取器另有一个**可离线重跑**的评测（B）：
 
@@ -325,6 +389,9 @@ node probe/extract-eval.mjs --refresh  # 重新抓 10 条、重写 fixtures
    `startAt / intervalHours / timezone`，不会写进 `config.json`，因此**不会生效**（会被真值盖过）。
    改时间请用本插件的设置页 / `web_watch_config`，或直接改 `config.json`。
    `sources.json.schedule` 也只是镜像：手改无效，启动自检会覆盖（欄位保留给旧版 P1 CLI）。
+9. **SSRF 只做到第一层（0.1.9）**：私有 / loopback / link-local / `.local` 与「公开域名解析到内网」
+   都已挡在发请求之前，但**DNS rebinding 与判定/连接之间的时间窗未解**（正解是 pinned-IP）。
+   定位是「挡掉误配置与低成本的 SSRF」，不是「对抗能控制 DNS 的对手」——详见上面「安全边界：SSRF（0.1.9）」。
 
 ---
 
@@ -339,18 +406,20 @@ dsh-web-watch/
     state.mjs           # stateDirOf(ctx) / 家目录铺底 / 默认源 / createWriteQueue / 日志
     hostdeps.mjs        # 从宿主树取 schemastery + defineTool（拿不到就降级，照 bili）
     extract.mjs         # 正文抽取（零依赖；html adapter 与 web_watch_read 共用）
-    readpage.mjs        # web_watch_read：限速 / redirect / 大小 / 存档 / 只回摘要
+    readpage.mjs        # web_watch_read：限速 / 逐跳 redirect + SSRF / 大小 / 存档 / 只回摘要
+    safeurl.mjs         # 🔒 SSRF 第一層：只放行公開 https（形狀 + IP 字面值 + DNS 全部 A/AAAA；零依賴）
     engine/
-      run.mjs           # P1 pull.mjs 的编排流程（runPull / dueSourceIds；fallbacks / failStreak）
-      loader.mjs        # 读 sources.json、校驗、補預設（schedule 鏡像標記也在這裏）
+      run.mjs           # P1 pull.mjs 的编排流程（runPull / dueSourceIds；fallbacks / failStreak / SSRF）
+      loader.mjs        # 读 sources.json、校驗、補預設（schedule 鏡像標記 + 配置階段 SSRF 字面值檢查）
       store.mjs         # 快照 / index.json / 清理 / assertInside 边界检查
       digest.mjs        # 三节摘要 + failStreak ≥ 3 的「⚠ 注意」節
       dedupe.mjs        # guid / 正文 sha256 去重
       schedule.mjs      # due 判断与时区工具
       rss.mjs jsonp.mjs html.mjs xml.mjs   # adapter 底层（html.mjs 是 identity 旧版，run.mjs 已改走 extract.mjs）
   client.js             # 设置页（window.__ModuleLoader__.load + slots.register('settings.section')）
-  scripts/smoke.mjs     # 无需 DSH 的烟雾测试
+  scripts/smoke.mjs     # 无需 DSH 的烟雾测试（含 SSRF 端到端 3 条 + 引擎端 3 条）
   probe/extract-eval.mjs # B 的离线可重跑评测（probe/fixtures/*.html）
+  probe/safeurl-cases.mjs # SSRF 案例表（注入 resolve，零真 DNS；smoke --offline 跑同一份）
   README.md
   CHANGELOG.md
 ```

@@ -1,6 +1,6 @@
 {
   "name": "dsh-web-watch",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "DSH 插件：世界邊界擴張器（web-watch）—— 定時抓 feed / JSON、去重、落快照，產出三節 digest，並在到期時把摘要塞進指定會話",
   "keywords": [
     "dsh",
@@ -33,6 +33,7 @@
     "cordis.patch.yml",
     "scripts/smoke.mjs",
     "probe/extract-eval.mjs",
+    "probe/safeurl-cases.mjs",
     "probe/fixtures",
     "README.md",
     "CHANGELOG.md",

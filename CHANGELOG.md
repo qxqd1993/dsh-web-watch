@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## 0.1.9 — 2026-10-27
+
+### 安全（SSRF：擋掉伺服器端請求偽造）
+
+- **對抗性測試補洞（同日，Lead 複核後）**：子代理原本的表 30/30 全綠，但用外部清單去攻，
+  發現 **6to4（`2002::/16`）與 Teredo（`2001:0::/32`）** 這兩類「內嵌 IPv4 的隧道段」沒被擋 ——
+  它們可以經中繼把請求帶進內網。已補上 6to4 / Teredo / benchmarking `2001:2::/48` /
+  discard `100::/64` / local-use NAT64 `64:ff9b:1::/48`，案例表從 30 條增到 **36 條**。
+  ⇒ 教訓：**「自己的測試全綠」不等於「清單完整」**，要拿外部的對抗清單去撞。
+
+- **動機**：插件跑在宿主進程裏，`fetch` 有完整網路權限；而 `web_watch_read` 與定時抓源
+  過去都接受**任意** https URL。於是一條被投毒的 feed（或一句「幫我讀這個連結」）就能讓
+  `https://169.254.169.254/latest/meta-data/`、`https://10.0.0.5/`、`https://127.0.0.1:8443/`
+  的內容被拉進 digest —— 而 digest 是會進模型上下文的。典型 SSRF，且能直接外帶內網資料。
+- **新增 `lib/safeurl.mjs`（零依賴、不發請求、不寫檔）**：
+  - `checkPublicHttpsUrl(raw, { resolve })`：形狀（只 `https:`、埠只能 443 / 省略、不帶帳密）
+    + IP 字面值（loopback / link-local / 私有 / `0.0.0.0` / CGNAT / 組播保留 / 文件用段 /
+    IPv4-mapped 與 NAT64 內嵌的私有 IPv4）+ 主機名（`localhost` / `*.local` / `*.internal` / `*.localhost`）
+    + `dns.lookup(host, { all: true })` 解析出**所有** A/AAAA（任一落內網就拒，防「公開域名指向內網」）；
+    解析失敗 / 5s 超時 ⇒ `dns-failed`。code：`not-https` / `has-credentials` / `bad-port` /
+    `private-host` / `dns-failed` / `bad-url`。
+  - `checkPublicHttpsUrlSync(raw)`：同一套規則但**不碰 DNS**，給配置校驗用。
+  - `resolve` 可注入（測試不打真 DNS）；**故意不快取**判定結果（避免把 stale 判斷帶進請求路徑）。
+- **三個入口全部必經**：
+  1. `lib/readpage.mjs`：抓取前檢查；redirect 改成**自己跟**（`redirect:'manual'`，≤5 跳），
+     **每一跳重新檢查**，最後再核對 `response.url` 的 host ⇒「公開 URL → 302 內網」在發請求前就被擋；
+     失敗新增 `code: 'unsafe-url'`（`http://` / 非法 URL / 解析失敗仍回原本的 `unreachable`，不改既有語義）。
+  2. `lib/engine/run.mjs`：主 URL 與**每一個** `fallbacks` 都先檢查（不合格 ⇒ 該端點跳過、`failure.code = "unsafe-url"`、
+     照常計 `failures` / `failStreak`，請求不發出去）；redirect 也改成自己跟、逐跳檢查（新增 `LIMITS.maxRedirects = 5`）。
+  3. `lib/engine/loader.mjs`：`normalizeSource` 在**配置階段**就拒私有 / 本機**字面值**（含 `fallbacks`）；
+     ⚠️ 這裡**故意不解析 DNS** —— 配置校驗不能變成阻塞的網路請求。
+- **測試（全部離線，零真 DNS）**：
+  - 新增 `probe/safeurl-cases.mjs`：30 條案例表（`http://` / 帳密 / `:8080` / `127.0.0.1` / `[::1]` /
+    `169.254.169.254` / `10.1.2.3` / `172.20.0.1` / `192.168.1.1` / `0.0.0.0` / `localhost` / `foo.local` /
+    公開域名→公開 IP / 公開域名→`192.168.1.1` / 混合 A 記錄 / 解析失敗 / 十進位與十六進位寫法的 127.0.0.1 /
+    `::ffff:` 包裝 / `fe80::` / `fd00::` / `100.100.100.200` / `metadata.google.internal` / 對照組放行）；
+    `node probe/safeurl-cases.mjs` 直接印 URL / 期望 / 實際 / 原因四欄。
+  - `scripts/smoke.mjs` 新增 12 項：案例表（1）+ 端到端（`web_watch_read` 對內網 URL 與工具入口
+    都回 `unsafe-url` 且**零請求**、源配置 / `fallbacks` 的私有 URL 被 `ConfigError` 拒、假 fetch 模擬
+    `302 → 169.254.169.254` 只發 1 個請求）+ 設置頁 `POST /sources` 拒絕內網源且沒寫進檔（2）+
+    引擎端 3 條（私有源 ⇒ `unsafe-url` + `failStreak=1` + 0 請求、引擎 `302` 到內網只發 1 個請求、
+    不安全主 URL + 安全 fallback 走 fallback 成功）。
+  - 既有離線測試改為**注入假 resolver**（`.example` 這種域名以前靠「真的連不上」兜著，現在不該讓
+    任何測試依賴真 DNS）。
+- **結果**：離線 `73/73 ok`（原 61）、帶真網路 `90/90 ok`（原 78，5 條真源全部抓得到、self-check 11/11）；
+  repo 檢出佈局（沒有兄弟 `web-watch/`）離線 `66/66 ok`。
+- **限制（本版故意不做）**：**DNS rebinding 未解** —— 解析與 `fetch` 實際連線是兩次獨立解析，
+  中間可能被換掉。正解是 pinned-IP（解析一次 → 用該 IP 連、SNI/Host 照舊，需改用 `node:https` + 自訂
+  `lookup`，還要處理 TLS 與 IPv6），工程量另計。另外不做網路層出口限制，且在判定與連線之間仍有時間窗。
+  詳見 README「安全邊界：SSRF（0.1.9）」。
+- **版本**：`0.1.8 → 0.1.9`。
+
 ## 0.1.8 — 2026-10-27
 
 ### 修（只動測試，不動產品行為）

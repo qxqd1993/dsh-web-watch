@@ -42,9 +42,12 @@ import { buildDigest } from '../lib/engine/digest.mjs';
 import { runPull } from '../lib/engine/run.mjs';
 import { isInside } from '../lib/engine/store.mjs';
 import { READ_LIMITS, readPage, resetReadState } from '../lib/readpage.mjs';
+import { RESOLVERS, formatTable, runCases } from '../probe/safeurl-cases.mjs';
 
 const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 const OFFLINE = process.argv.includes('--offline');
+/** 離線測試一律注入這個假 DNS（不打真 DNS、不碰外網）。 */
+const OFFLINE_DNS = RESOLVERS.public;
 const results = [];
 let failures = 0;
 
@@ -358,6 +361,7 @@ resetReadState();
 const notHtml = await readPage({
   root: readHome,
   url: 'https://read-json.example/a',
+  resolve: OFFLINE_DNS,
   fetchImpl: async () => fakeResponse({ type: 'application/json', body: '{"a":1}' }),
 });
 check('content-type 不是 HTML ⇒ not-html', notHtml.ok === false && notHtml.code === 'not-html', JSON.stringify(notHtml));
@@ -366,6 +370,7 @@ resetReadState();
 const tooLarge = await readPage({
   root: readHome,
   url: 'https://read-big.example/a',
+  resolve: OFFLINE_DNS,
   fetchImpl: async () => fakeResponse({ type: 'text/html', contentLength: READ_LIMITS.maxBytes + 1 }),
 });
 check('content-length 超過 5MB ⇒ too-large（明確拒絕）', tooLarge.ok === false && tooLarge.code === 'too-large', JSON.stringify(tooLarge));
@@ -374,6 +379,7 @@ resetReadState();
 const blockedRead = await readPage({
   root: readHome,
   url: 'https://read-403.example/a',
+  resolve: OFFLINE_DNS,
   fetchImpl: async () => fakeResponse({ status: 403, type: 'text/html', body: '<title>Just a moment...</title>' }),
 });
 check('HTTP 403 ⇒ blocked（不把挑戰頁當正文）', blockedRead.ok === false && blockedRead.code === 'blocked', JSON.stringify(blockedRead));
@@ -385,6 +391,7 @@ for (const host of ['read-a.example', 'read-b.example', 'read-c.example', 'read-
     await readPage({
       root: readHome,
       url: `https://${host}/story`,
+      resolve: OFFLINE_DNS,
       fetchImpl: async () => fakeResponse({ body: fakeArticleHtml() }),
     }),
   );
@@ -393,6 +400,113 @@ check(
   '同一分鐘讀 4 次 ⇒ 第 4 次 rate-limited（前 3 次成功）',
   rateRows.slice(0, 3).every((row) => row.ok === true) && rateRows[3].ok === false && rateRows[3].code === 'rate-limited',
   rateRows.map((row) => (row.ok ? 'ok' : row.code)).join(','),
+);
+
+/* ────────────────────── ④.7 SSRF 防護：案例表（注入 resolve，零網路） ────────────────────── */
+
+console.log('\n=== ④.7 SSRF 防護：safeurl 案例表（注入 resolve，零網路） ===');
+const safeRows = await runCases();
+console.log(formatTable(safeRows));
+check(
+  `safeurl 案例表 ${safeRows.filter((row) => row.ok).length}/${safeRows.length} 符合期望`,
+  safeRows.every((row) => row.ok),
+  safeRows
+    .filter((row) => !row.ok)
+    .map((row) => `${row.url} 期望 ${row.expect} 實際 ${row.actual}`)
+    .join('; ') || 'http / 帳密 / 埠 / 內網 IP / .local / DNS 內網 / DNS 失敗 / 對照組全對',
+);
+
+/* ────────────────────── ④.8 SSRF 端到端：read / 配置 / redirect ────────────────────── */
+
+console.log('\n=== ④.8 SSRF 端到端：內網 URL / 私有源 / 302 到內網 ===');
+
+// ① web_watch_read：內網 URL 在發請求之前就被拒（fetch 一次都不該被呼叫）
+resetReadState();
+let ssrfFetches = 0;
+const ssrfRead = await readPage({
+  root: readHome,
+  url: 'https://169.254.169.254/latest/meta-data/',
+  resolve: OFFLINE_DNS,
+  fetchImpl: async () => {
+    ssrfFetches += 1;
+    throw new Error('不該發出這個請求');
+  },
+});
+check(
+  'web_watch_read 對內網 URL ⇒ unsafe-url，且沒有發出任何請求',
+  ssrfRead.ok === false && ssrfRead.code === 'unsafe-url' && ssrfFetches === 0,
+  `${ssrfRead.code} / fetch=${ssrfFetches} / ${ssrfRead.reason}`,
+);
+
+// 也走一次真的工具入口（index.js → readPage）：`https://127.0.0.1/` 是字面值，不需要 DNS
+resetReadState();
+const toolSsrf = await runTool(ctxState, 'web_watch_read', { url: 'https://127.0.0.1/' });
+check(
+  'web_watch_read 工具入口也回 unsafe-url（不是靜默放行）',
+  toolSsrf?.ok === false && toolSsrf?.code === 'unsafe-url',
+  JSON.stringify(toolSsrf),
+);
+
+// ② 配置階段：私有 / 本機 / fallbacks 的內網 URL 都進不來
+let cfgPrivate = null;
+try {
+  normalizeSources([{ id: 'ssrf-src', kind: 'rss', url: 'https://192.168.1.1/feed.xml' }]);
+} catch (error) {
+  cfgPrivate = error;
+}
+check(
+  '配置階段就拒私有 URL（源清單）',
+  cfgPrivate?.name === 'ConfigError' && /192\.168\.1\.1/.test(String(cfgPrivate.message)),
+  String(cfgPrivate?.message || '（沒有拒絕）'),
+);
+
+let cfgLocal = null;
+try {
+  normalizeSources([{ id: 'ssrf-local', kind: 'rss', url: 'https://localhost/feed.xml' }]);
+} catch (error) {
+  cfgLocal = error;
+}
+check(
+  '配置階段就拒 localhost（源清單）',
+  cfgLocal?.name === 'ConfigError' && /localhost/.test(String(cfgLocal.message)),
+  String(cfgLocal?.message || '（沒有拒絕）'),
+);
+
+let cfgFallback = null;
+try {
+  normalizeSources([
+    { id: 'ssrf-fb', kind: 'rss', url: 'https://ok.example/feed.xml', fallbacks: ['https://169.254.169.254/'] },
+  ]);
+} catch (error) {
+  cfgFallback = error;
+}
+check(
+  '配置階段就拒 fallbacks 裏的內網 URL',
+  cfgFallback?.name === 'ConfigError' && /169\.254\.169\.254/.test(String(cfgFallback.message)),
+  String(cfgFallback?.message || '（沒有拒絕）'),
+);
+
+// ③ redirect 到內網：假 fetch 模擬 302，只該發出第 1 個請求
+resetReadState();
+const redirectCalls = [];
+const redirectRead = await readPage({
+  root: readHome,
+  url: 'https://public-redirect.example/a',
+  resolve: OFFLINE_DNS,
+  fetchImpl: async (target) => {
+    redirectCalls.push(String(target));
+    return fakeResponse({
+      status: 302,
+      type: 'text/html',
+      location: 'https://169.254.169.254/latest/meta-data/',
+      body: '',
+    });
+  },
+});
+check(
+  'redirect 到內網 ⇒ unsafe-url（沒有跟著跳進去）',
+  redirectRead.ok === false && redirectRead.code === 'unsafe-url' && redirectCalls.length === 1,
+  `${redirectRead.code} / ${redirectCalls.length} 個請求 / ${redirectRead.reason}`,
 );
 
 // tick 註冊 + 手動觸發
@@ -498,6 +612,23 @@ const badKind = await callRoute(route.handler, {
   body: { sources: [{ id: 'x-bad', kind: 'nope', url: 'https://example.com/feed.xml' }] },
 });
 check('POST /sources 拒絕 kind=nope', badKind?.ok === false && /kind/.test(String(badKind.error)), JSON.stringify(badKind));
+
+const badPrivate = await callRoute(route.handler, {
+  method: 'POST',
+  path: '/api/web-watch/sources',
+  body: { sources: [{ id: 'x-ssrf', kind: 'rss', url: 'https://10.0.0.5/feed.xml' }] },
+});
+check(
+  'POST /sources 拒絕內網 URL（設置頁那條路也擋）',
+  badPrivate?.ok === false && /10\.0\.0\.5/.test(String(badPrivate.error)),
+  JSON.stringify(badPrivate),
+);
+const afterPrivate = JSON.parse(readFileSync(join(home2, 'web-watch', 'sources.json'), 'utf8'));
+check(
+  '被拒的內網源沒有寫進 sources.json',
+  !afterPrivate.sources.some((item) => item.id === 'x-ssrf'),
+  afterPrivate.sources.map((item) => item.id).join(','),
+);
 
 const added = await callRoute(route.handler, {
   method: 'POST',
@@ -831,6 +962,7 @@ const fbRun = await runPull({
   homeDir: fbHome,
   sources: [fbSource],
   schedule: { ...DEFAULT_SCHEDULE },
+  resolve: OFFLINE_DNS,
   fetchImpl: async (url) => {
     fbCalls.push(String(url));
     if (String(url).includes('primary.example')) return fakeResponse({ status: 500, type: 'text/plain' });
@@ -861,6 +993,7 @@ const failRun = await runPull({
   homeDir: failHome,
   sources: [failSource],
   schedule: { ...DEFAULT_SCHEDULE },
+  resolve: OFFLINE_DNS,
   fetchImpl: async () => fakeResponse({ status: 500, type: 'text/plain' }),
   log: () => {},
 });
@@ -886,6 +1019,7 @@ const htmlRun = await runPull({
   homeDir: htmlHome,
   sources: [htmlSource],
   schedule: { ...DEFAULT_SCHEDULE },
+  resolve: OFFLINE_DNS,
   fetchImpl: async () => fakeResponse({ body: fakeArticleHtml() }),
   log: () => {},
 });
@@ -894,6 +1028,110 @@ check(
   'kind=html 走 extractMain（adapter=extract、不再 identity）',
   htmlRun.counts.newEntries === 1 && htmlEntry?.adapter === 'extract' && !String(htmlEntry?.body || '').includes('<'),
   `new=${htmlRun.counts.newEntries} adapter=${htmlEntry?.adapter} tier=${htmlEntry?.tier}`,
+);
+
+/* ────────────────────── ⑤.5 SSRF：引擎端（私有源 / 302 內網，離線） ────────────────────── */
+
+console.log('\n=== ⑤.5 SSRF：引擎端（私有源 / 302 到內網，離線假 fetch） ===');
+
+// 私有源：loader 已經在配置階段擋掉，這裡直接餵手工 source 給 runPull，驗「抓取時也擋」
+const ssrfEngineHome = mkdtempSync(join(tmpdir(), 'web-watch-smoke-ssrf-engine-'));
+let ssrfEngineFetches = 0;
+const privateSource = {
+  id: 'ssrf-engine',
+  kind: 'rss',
+  role: 'full',
+  url: 'https://10.0.0.5/feed.xml',
+  maxItems: 10,
+  trusted: true,
+  fallbacks: [],
+};
+const privateRun = await runPull({
+  homeDir: ssrfEngineHome,
+  sources: [privateSource],
+  schedule: { ...DEFAULT_SCHEDULE },
+  resolve: OFFLINE_DNS,
+  fetchImpl: async () => {
+    ssrfEngineFetches += 1;
+    return fakeResponse({ status: 200, type: 'application/rss+xml', body: rssBody });
+  },
+  log: () => {},
+});
+check(
+  '引擎拒絕私有源 ⇒ failed（code unsafe-url、failStreak=1、請求沒發出去）',
+  privateRun.counts.failedSources === 1 &&
+    privateRun.results[0]?.failure?.code === 'unsafe-url' &&
+    privateRun.results[0]?.failStreak === 1 &&
+    ssrfEngineFetches === 0,
+  `failed=${privateRun.counts.failedSources} code=${privateRun.results[0]?.failure?.code} fetch=${ssrfEngineFetches} reason=${privateRun.results[0]?.failure?.reason}`,
+);
+
+// 引擎 redirect：公開 feed 302 到 metadata ⇒ 只該發出第 1 個請求
+const ssrfRedirectHome = mkdtempSync(join(tmpdir(), 'web-watch-smoke-ssrf-redirect-'));
+const ssrfRedirectCalls = [];
+const redirectSource = {
+  id: 'ssrf-redirect',
+  kind: 'rss',
+  role: 'full',
+  url: 'https://feed-redirect.example/rss',
+  maxItems: 10,
+  trusted: true,
+  fallbacks: [],
+};
+const redirectRun = await runPull({
+  homeDir: ssrfRedirectHome,
+  sources: [redirectSource],
+  schedule: { ...DEFAULT_SCHEDULE },
+  resolve: OFFLINE_DNS,
+  fetchImpl: async (target) => {
+    ssrfRedirectCalls.push(String(target));
+    return fakeResponse({
+      status: 302,
+      type: 'application/rss+xml',
+      location: 'https://169.254.169.254/latest/meta-data/',
+      body: '',
+    });
+  },
+  log: () => {},
+});
+check(
+  '引擎 redirect 到內網 ⇒ unsafe-url（只發 1 個請求，沒跟著跳）',
+  redirectRun.counts.failedSources === 1 &&
+    redirectRun.results[0]?.failure?.code === 'unsafe-url' &&
+    ssrfRedirectCalls.length === 1,
+  `failed=${redirectRun.counts.failedSources} code=${redirectRun.results[0]?.failure?.code} requests=${ssrfRedirectCalls.length}`,
+);
+
+// 不安全的主 URL + 安全的 fallback ⇒ 換端點後照樣成功（不是整條源報廢）
+const ssrfFallbackHome = mkdtempSync(join(tmpdir(), 'web-watch-smoke-ssrf-fallback-'));
+const ssrfFallbackCalls = [];
+const unsafePrimary = {
+  id: 'ssrf-fallback',
+  kind: 'rss',
+  role: 'full',
+  url: 'https://10.9.9.9/feed.xml',
+  maxItems: 10,
+  trusted: true,
+  fallbacks: ['https://good.example/feed.xml'],
+};
+const ssrfFallbackRun = await runPull({
+  homeDir: ssrfFallbackHome,
+  sources: [unsafePrimary],
+  schedule: { ...DEFAULT_SCHEDULE },
+  resolve: OFFLINE_DNS,
+  fetchImpl: async (target) => {
+    ssrfFallbackCalls.push(String(target));
+    return fakeResponse({ status: 200, type: 'application/rss+xml', body: rssBody });
+  },
+  log: () => {},
+});
+check(
+  '不安全的主 URL + 安全 fallback ⇒ 走 fallback 成功（只打 1 次、打在 fallback 上）',
+  ssrfFallbackRun.counts.failedSources === 0 &&
+    ssrfFallbackRun.counts.newEntries === 1 &&
+    ssrfFallbackCalls.length === 1 &&
+    String(ssrfFallbackCalls[0]).includes('good.example'),
+  `failed=${ssrfFallbackRun.counts.failedSources} new=${ssrfFallbackRun.counts.newEntries} calls=${JSON.stringify(ssrfFallbackCalls)}`,
 );
 
 /* ────────────────────── ⑥ 引擎煙霧（真網路） ────────────────────── */
