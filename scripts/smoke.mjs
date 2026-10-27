@@ -41,6 +41,7 @@ import { SCHEDULE_MIRROR_NOTE, normalizeSources } from '../lib/engine/loader.mjs
 import { buildDigest } from '../lib/engine/digest.mjs';
 import { runPull } from '../lib/engine/run.mjs';
 import { isInside } from '../lib/engine/store.mjs';
+import { extractMain } from '../lib/extract.mjs';
 import { READ_LIMITS, readPage, resetReadState } from '../lib/readpage.mjs';
 import { RESOLVERS, formatTable, runCases } from '../probe/safeurl-cases.mjs';
 
@@ -1028,6 +1029,44 @@ check(
   'kind=html 走 extractMain（adapter=extract、不再 identity）',
   htmlRun.counts.newEntries === 1 && htmlEntry?.adapter === 'extract' && !String(htmlEntry?.body || '').includes('<'),
   `new=${htmlRun.counts.newEntries} adapter=${htmlEntry?.adapter} tier=${htmlEntry?.tier}`,
+);
+
+// 0.1.10：extractMain 的 strategy 擴展點（契約見 docs/extract.md）
+const strategyHtml =
+  '<!doctype html><html><head><title>策略煙霧</title></head><body><article>' +
+  '<p>預設算法會抽到這段正文，用來跟自訂策略對照。</p></article></body></html>';
+const strategyInjected = extractMain(strategyHtml, {
+  strategy: (html, context) => ({ text: context.title, how: 'smoke-title' }),
+});
+check(
+  'extractMain 可注入 strategy（text 由策略決定，不走預設算法）',
+  strategyInjected.text === '策略煙霧' && strategyInjected.chars === 4 && strategyInjected.ok === true,
+  `text=${JSON.stringify(strategyInjected.text)} chars=${strategyInjected.chars} tier=${strategyInjected.tier}`,
+);
+const strategyDefault = extractMain(strategyHtml, {});
+check(
+  '不傳 strategy 仍走預設算法（兩條路徑不串味）',
+  strategyDefault.text.includes('預設算法會抽到這段正文') && strategyDefault.text !== strategyInjected.text,
+  `tier=${strategyDefault.tier}`,
+);
+let strategyThrew = null;
+let strategyDegraded = null;
+try {
+  strategyDegraded = extractMain(strategyHtml, {
+    strategy: () => {
+      throw new Error('smoke-boom');
+    },
+  });
+} catch (error) {
+  strategyThrew = error;
+}
+check(
+  '非法 strategy ⇒ 安全降級 shell（不拋到調用方）',
+  strategyThrew === null &&
+    strategyDegraded?.ok === false &&
+    strategyDegraded?.tier === 'shell' &&
+    /自訂策略失效/.test(String(strategyDegraded?.reason || '')),
+  strategyThrew ? `拋了：${strategyThrew.message}` : `tier=${strategyDegraded?.tier} reason=${strategyDegraded?.reason}`,
 );
 
 /* ────────────────────── ⑤.5 SSRF：引擎端（私有源 / 302 內網，離線） ────────────────────── */

@@ -338,6 +338,8 @@ node scripts/smoke.mjs --offline
 - **熔断（C）**：`failStreak=3` 时 digest 出现 `## ⚠ 注意` 且排在 `## 變動` 之前，`failStreak=2` 时整节不出现；
   fallback 第 2 个端成功 ⇒ `failedSources=0`、`failures=0`、`failStreak=0`；两个都失败 ⇒
   原因带「試過 2 個端點」；`fallbacks` 里的 `http://` 被配置校验拒绝；
+- **正文抽取器的 strategy（0.1.10）**：自訂策略能改 `text`；非法策略（非函式 / 拋錯 / 形狀不對）
+  安全降級成 `tier:'shell'` 且不拋到調用方；不傳 strategy 仍走預設算法；
 - 引擎：默认源跑一輪 → digest 三节合计 = 默认源数；**上轮抓成功的源立刻再跑 = 0 新增**（去重没被移植弄坏）；
   所有写入都在家目录内；self-check 11/11；
 - **配置所有权（0.1.7）**：`config.json` 17:30 / `sources.json` 09:00 启动后，镜像是 17:30 且 `watch.log`
@@ -346,8 +348,9 @@ node scripts/smoke.mjs --offline
   `persistCfg` 与 `saveSources` **并发**触发后，`config.json` 与 `sources.json.schedule` 一致且源不丢；
 - **P1 CLI 三層**（`web-watch/pull.mjs`，真实子进程跑 `--tick`）：只有 sources 09:00 ⇒ 迁进 `config.json` 并 log；
   再把 sources 改 08:00 ⇒ 仍用 config 的 **09:00**（退役）；两边都没有 ⇒ `defaults`。
-  离线 `73/73 ok`；带真网络 `90/90 ok`（0.1.8 的 61 / 78 项一条没退化）；
-  repo 检出布局（没有兄弟 `web-watch/`）离线 `66/66 ok`（7 项 P1 CLI 测试跳过）。
+  离线 `76/76 ok`（0.1.9 的 73 项一条没退化；0.1.10 新增 strategy 3 项）；
+  repo 检出布局（没有兄弟 `web-watch/`）离线 `69/69 ok`（7 项 P1 CLI 测试跳过）。
+  带真网络的部分本轮未重跑（0.1.9 基线为 `90/90`）。
 
 SSRF 案例表也能单独跑（**不打真 DNS、不碰外网**，会印出 URL / 期望 / 实际 / 原因四栏）：
 
@@ -364,6 +367,12 @@ node probe/extract-eval.mjs --refresh  # 重新抓 10 条、重写 fixtures
 
 它会打印 rawBytes / baseline 字数 / 抽出字数 / ratio / tier / 前 120 字的表，
 并对「euobserver + cgtn ≥ 800 字」「arabnews 403 ⇒ blocked」做断言。
+
+`strategy` 扩展点另有 `node probe/extract-strategy.mjs`：证明注入生效、非法策略安全降级成 `shell`（不抛）。
+
+第三方要单独用这个抽取器：`import { extractMain } from 'dsh-web-watch/extract'`（契约见 `docs/extract.md`）；
+它回传 `{ ok, title, text, chars, ratio, tier, reason }`，`tier` ∈ `blocked` / `shell` / `partial` / `full`；
+换算法或调门槛之前，先跑 `node probe/extract-eval.mjs` 的 10 条 fixtures，确保真实网页的字数不退化。
 
 ---
 
@@ -417,8 +426,10 @@ dsh-web-watch/
       schedule.mjs      # due 判断与时区工具
       rss.mjs jsonp.mjs html.mjs xml.mjs   # adapter 底层（html.mjs 是 identity 旧版，run.mjs 已改走 extract.mjs）
   client.js             # 设置页（window.__ModuleLoader__.load + slots.register('settings.section')）
-  scripts/smoke.mjs     # 无需 DSH 的烟雾测试（含 SSRF 端到端 3 条 + 引擎端 3 条）
+  docs/extract.md       # 正文抽取器契约（输入/输出、tier 门槛、strategy、稳定度承诺）
+  scripts/smoke.mjs     # 无需 DSH 的烟雾测试（含 SSRF 端到端 3 条 + 引擎端 3 条 + strategy 3 条）
   probe/extract-eval.mjs # B 的离线可重跑评测（probe/fixtures/*.html）
+  probe/extract-strategy.mjs # strategy 扩展点的可执行契约（注入 + 非法策略降级）
   probe/safeurl-cases.mjs # SSRF 案例表（注入 resolve，零真 DNS；smoke --offline 跑同一份）
   README.md
   CHANGELOG.md

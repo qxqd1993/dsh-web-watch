@@ -1,5 +1,45 @@
 # CHANGELOG
 
+## 0.1.10 — 2026-10-28
+
+### 加（契約＋strategy＋外部導出；算法與輸出一行沒改）
+
+- **契約文件 `docs/extract.md`**：把 `extractMain` 當成一個有契約的小庫寫清楚 ——
+  - 輸入：`html`、`{ url, status, maxChars, strategy }` 的型別、預設與用途（`url` 只傳給 strategy；
+    `status` 403/429 直接 blocked；`maxChars` 只截回傳值）；
+  - 輸出：`ok / title / text / chars / ratio / tier / reason` 的型別與語義（`ratio` 用**截斷前**正文算、
+    baseline 是整頁去標籤字數）；
+  - `tier ∈ blocked/shell/partial/full` 的**判定順序與門檻**（0 字、<400 且 >50KB、<800、
+    段落 <3 或 ratio <0.1），以及 `ok = tier 是 full 或 partial`；
+  - 錯誤語義：`reason` 永遠是人話、沒有錯誤碼；機器判斷看 `tier` + `ok`；
+  - 穩定度承諾：契約在 1.x 內不變；算法／門檻可調，但必須讓 `probe/extract-eval.mjs` 的 fixtures 全過。
+- **可替換策略 `strategy`（一行式擴展點，沒有 registry）**：`extractMain(html, { strategy })` 會呼叫
+  `strategy(html, { title, status, url })`，期望回 `{ text, how? }`。`text` 原樣採用；`chars/ratio/tier/maxChars`
+  照舊由 `extractMain` 算。不傳 / 傳 `null` 用**現行算法**（原封不動搬進 `defaultStrategy`）。
+  非法策略（不是函式 / 拋錯 / 形狀不對）⇒ `tier:'shell'` + `ok:false`，**不把例外丟給調用方**；
+  blocked 優先於 strategy，命中就不呼叫它。`lib/readpage.mjs` / `lib/engine/run.mjs` 不傳 strategy，
+  語義完全不變。
+- **對外導出**：`package.json` 的 `exports` 新增 `"./extract": "./lib/extract.mjs"`，第三方可用
+  `import { extractMain } from 'dsh-web-watch/extract'`；`files` 補 `docs/`、`probe/extract-strategy.mjs`。
+  README 加了三行「第三方怎麼用」＋建議先跑 fixtures。
+- **測試**：
+  - 新增 `probe/extract-strategy.mjs`（10 項）：證明自訂策略真的被呼叫、拿到 `{ title, status, url }`、
+    只回第一段時輸出確實改變；四種非法策略都在 `extractMain` 邊界被降級成 shell 且不拋；
+    `strategy:null` 等於預設；blocked 優先且不呼叫 strategy。
+  - `scripts/smoke.mjs` 新增 3 項（注入生效、預設路徑不串味、非法策略安全降級），`--offline` 從 73 → **76/76**；
+    repo 檢出佈局（沒有兄弟 `web-watch/`）從 66 → **69/69**（7 項 P1 CLI 跳過）。
+  - `probe/extract-eval.mjs` 的 10 條 fixtures 輸出**逐字元相同**（改前/改後 diff `IDENTICAL`，
+    10/10 通過），證明這輪只加契約與擴展點、沒有動算法。
+- **結果**：`node --check` 全過；`node probe/extract-eval.mjs` 10 條全過（字數與 0.1.9 一致）；
+  `node probe/extract-strategy.mjs` 全過；`node scripts/smoke.mjs --offline` 76/76；repo 佈局 69/69。
+  帶真網路的部分本輪未重跑。
+- **為什麼不拆獨立 repo / npm 包（YAGNI）**：它現在就是**一個零依賴檔案**，唯一消費者是本插件
+  （`readpage` / `run.mjs`）；拆包要另立 repo、發佈流程、版本對齊與 fixture 同步，換來的只是
+  「聽起來比較模組化」。這一輪真正缺的是**契約與可替換點**，不是套件邊界 —— 用 `docs/extract.md`
+  ＋ fixtures 固定住，外部要用的話 `dsh-web-watch/extract` 這個子路徑已經夠了。等真的出現第二個
+  獨立消費者（或需要獨立版本節奏）再拆，成本才划算。
+- **版本**：`0.1.9 → 0.1.10`。
+
 ## 0.1.9 — 2026-10-27
 
 ### 安全（SSRF：擋掉伺服器端請求偽造）
