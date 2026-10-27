@@ -1,4 +1,4 @@
-# dsh-web-watch（世界邊界擴張器）
+# dsh-web-watch（蓝色大肥鱼的报箱）
 
 把已经跑通的 **web-watch P1**（Node CLI：抓 feed / JSON、去重、落快照、产出三节 digest）包成 **DSH 插件**。
 
