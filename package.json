@@ -1,0 +1,75 @@
+{
+  "name": "dsh-web-watch",
+  "version": "0.1.7",
+  "description": "DSH 插件：世界邊界擴張器（web-watch）—— 定時抓 feed / JSON、去重、落快照，產出三節 digest，並在到期時把摘要塞進指定會話",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "web-watch",
+    "rss",
+    "digest"
+  ],
+  "license": "MIT",
+  "author": "qxqd1993",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qxqd1993/dsh-web-watch.git"
+  },
+  "homepage": "https://github.com/qxqd1993/dsh-web-watch#readme",
+  "bugs": {
+    "url": "https://github.com/qxqd1993/dsh-web-watch/issues"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client.js",
+    "cordis.patch.yml",
+    "scripts/smoke.mjs",
+    "probe/extract-eval.mjs",
+    "probe/fixtures",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "dsh": ">=0.1.7-rc.1",
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "scripts": {
+    "smoke": "node scripts/smoke.mjs",
+    "test": "node scripts/smoke.mjs --offline",
+    "eval": "node probe/extract-eval.mjs"
+  }
+}

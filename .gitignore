@@ -1,0 +1,18 @@
+# 依賴
+node_modules/
+
+# 運行時資料（家目錄產物，不入庫）
+pages/
+out/
+index.json
+watch.log
+*.log
+
+# 備份與臨時檔
+*.bak-*
+*.before-*
+probe/tmp-*
+
+# 系統檔
+.DS_Store
+Thumbs.db

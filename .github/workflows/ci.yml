@@ -1,0 +1,21 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 離線煙霧測試（61 項，不打網路）
+        run: node scripts/smoke.mjs --offline
+
+      - name: 抽取器評測（fixtures，離線）
+        run: node probe/extract-eval.mjs

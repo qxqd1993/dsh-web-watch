@@ -1,0 +1,106 @@
+{
+  "fetchedAt": "2026-10-25T12:59:00.991Z",
+  "maxFixtureBytes": 819200,
+  "cases": {
+    "euobserver-palantir": {
+      "slug": "euobserver-palantir",
+      "url": "https://euobserver.com/244723/calls-mount-for-un-world-food-programme-which-feeds-1-4m-people-in-gaza-to-quit-contract-with-palantir/",
+      "status": 200,
+      "contentType": "text/html; charset=UTF-8",
+      "rawBytes": 85318,
+      "storedBytes": 85318,
+      "truncatedAt": null,
+      "file": "euobserver-palantir.html"
+    },
+    "euobserver-bulgaria": {
+      "slug": "euobserver-bulgaria",
+      "url": "https://euobserver.com/244554/interview-bulgarias-presidential-election-becomes-a-test-of-rumen-radevs-grip-on-power/",
+      "status": 200,
+      "contentType": "text/html; charset=UTF-8",
+      "rawBytes": 74032,
+      "storedBytes": 74032,
+      "truncatedAt": null,
+      "file": "euobserver-bulgaria.html"
+    },
+    "euobserver-clocks": {
+      "slug": "euobserver-clocks",
+      "url": "https://euobserver.com/243533/putting-the-clocks-back-this-sunday-yet-millions-of-europeans-dont-want-to/",
+      "status": 200,
+      "contentType": "text/html; charset=UTF-8",
+      "rawBytes": 80073,
+      "storedBytes": 80073,
+      "truncatedAt": null,
+      "file": "euobserver-clocks.html"
+    },
+    "latimes-wealth-tax": {
+      "slug": "latimes-wealth-tax",
+      "url": "https://www.latimes.com/california/story/2026-10-24/more-than-351-million-spent-on-wealth-tax-on-november-ballot",
+      "status": 200,
+      "contentType": "text/html;charset=UTF-8",
+      "rawBytes": 537215,
+      "storedBytes": 537215,
+      "truncatedAt": null,
+      "file": "latimes-wealth-tax.html"
+    },
+    "latimes-latinos": {
+      "slug": "latimes-latinos",
+      "url": "https://www.latimes.com/politics/story/2026-10-23/many-latinos-are-over-trump-shift-is-especially-striking-in-texas",
+      "status": 200,
+      "contentType": "text/html;charset=UTF-8",
+      "rawBytes": 559906,
+      "storedBytes": 559906,
+      "truncatedAt": null,
+      "file": "latimes-latinos.html"
+    },
+    "latimes-mchenry": {
+      "slug": "latimes-mchenry",
+      "url": "https://www.latimes.com/sports/story/2026-10-23/britt-mchenry-resigns-state-department-drink-throwing-incident-wizards-game",
+      "status": 200,
+      "contentType": "text/html;charset=UTF-8",
+      "rawBytes": 492141,
+      "storedBytes": 492141,
+      "truncatedAt": null,
+      "file": "latimes-mchenry.html"
+    },
+    "cgtn-long-march": {
+      "slug": "cgtn-long-march",
+      "url": "https://news.cgtn.com/news/2026-10-21/Q-A-How-the-Long-March-shapes-the-CPC-and-China-s-modernization-today-1RqwPQaTw9G/p.html",
+      "status": 200,
+      "contentType": "text/html",
+      "rawBytes": 137356,
+      "storedBytes": 137356,
+      "truncatedAt": null,
+      "file": "cgtn-long-march.html"
+    },
+    "cgtn-doctors": {
+      "slug": "cgtn-doctors",
+      "url": "https://newsus.cgtn.com/news/2026-10-22/Next-gen-doctors-swap-scrubs-for-aprons-1RqUWNXv4By/p.html",
+      "status": 200,
+      "contentType": "text/html",
+      "rawBytes": 128628,
+      "storedBytes": 128628,
+      "truncatedAt": null,
+      "file": "cgtn-doctors.html"
+    },
+    "arabnews-blocked": {
+      "slug": "arabnews-blocked",
+      "url": "https://www.arabnews.com/rss.xml",
+      "status": 403,
+      "contentType": "text/html; charset=UTF-8",
+      "rawBytes": 5715,
+      "storedBytes": 5715,
+      "truncatedAt": null,
+      "file": "arabnews-blocked.html"
+    },
+    "cgtn-comesa": {
+      "slug": "cgtn-comesa",
+      "url": "https://newsaf.cgtn.com/news/2026-10-23/COMESA-leaders-call-for-stronger-regional-trade-and-integration-1Rtw4uMDSeY/p.html?UTM_Source=cgtn&UTM_Medium=rss&UTM_Campaign=World",
+      "status": 200,
+      "contentType": "text/html",
+      "rawBytes": 128823,
+      "storedBytes": 128823,
+      "truncatedAt": null,
+      "file": "cgtn-comesa.html"
+    }
+  }
+}
