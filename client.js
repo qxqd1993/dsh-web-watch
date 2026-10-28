@@ -12,7 +12,7 @@
  *
  *     const slots = ctx.get('slots')
  *     slots.inject('settings.section', () => slots.register(
- *       { name: 'settings.section', id: 'web-watch', order: 40, label: '世界邊界擴張器' },
+ *       { name: 'settings.section', id: 'web-watch', order: 40, label: '藍色大肥魚的報箱' },
  *       () => h(Panel),
  *     ))
  *
@@ -361,7 +361,7 @@ select[data-ww-input]{width:auto;min-width:92px;max-width:120px;flex:0 0 auto;}
         h(
           'div',
           { 'data-ww-sec': '' },
-          h('div', { 'data-ww-h': '' }, '世界邊界擴張器（web-watch）'),
+          h('div', { 'data-ww-h': '' }, '藍色大肥魚的報箱（web-watch）'),
           h(
             'div',
             { 'data-ww-row': '' },
@@ -658,7 +658,7 @@ select[data-ww-input]{width:auto;min-width:92px;max-width:120px;flex:0 0 auto;}
         if (!slots) return;
         slots.inject('settings.section', () =>
           slots.register(
-            { name: 'settings.section', id: 'web-watch', order: 40, label: '世界邊界擴張器' },
+            { name: 'settings.section', id: 'web-watch', order: 40, label: '藍色大肥魚的報箱' },
             () => h(Panel),
           ),
         );
