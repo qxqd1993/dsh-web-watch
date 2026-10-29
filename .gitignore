@@ -16,3 +16,7 @@ probe/tmp-*
 # 系統檔
 .DS_Store
 Thumbs.db
+
+# 本機限定筆記（發布清單、環境事實、坑）
+# 它住在專案裡，但**不進 repo、不進 npm 包** —— 這正是它存在的理由。
+LOCAL-NOTES.md
