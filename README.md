@@ -90,6 +90,20 @@ dsh plugin --profile desktop add "link:/absolute/path/to/dsh-web-watch"
 > 改完插件代码无需重新安装，但**仍需重启 DSH** 才生效。
 > 正式分发时把 `link:` 换成包名或 Git 地址即可，插件本身不必修改。
 
+**方式三：从 Git tag 安装（正式分发用）**
+
+```powershell
+dsh plugin --profile desktop add "github:qxqd1993/dsh-web-watch#v0.2.1"
+```
+
+`dsh plugin` 会把参数转交给 profile 的 **pnpm**，所以 `github:` 简写能用（需要本机有 `git`）。
+
+> ⚠️ **npm 12 起默认关闭了 git / remote 型依赖**（`allow-git=none`、`allow-remote=none`）。
+> 如果你直接用 npm 而不是 pnpm，会遇到 `EALLOWGIT` / `EALLOWREMOTE`。两种解法：
+> `npm install --allow-git=all github:qxqd1993/dsh-web-watch#v0.2.1`，或装上 tag 的 tarball：
+> `npm install --allow-remote=all https://codeload.github.com/qxqd1993/dsh-web-watch/tar.gz/refs/tags/v0.2.1`。
+> （2026-10-29 实测：后者安装成功，`version 0.2.1`，安装后 `smoke --offline` 69/69、`extract-eval` 10/10。）
+
 ### 3.2 确认 bundle 已注册
 
 `dsh plugin … add` 只是把参数**原样转交给 profile 目录的 pnpm**（`dsh plugin --help` 原文为 "forwarding the remaining arguments to pnpm"），它只修改 `dependencies`。真正让插件生效的是 profile 的 `dsh.profile.bundles` 中是否存在该包名：

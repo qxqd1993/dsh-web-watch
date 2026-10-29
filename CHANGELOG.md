@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.2.2 — 2026-10-29
+
+### 補（安裝文檔；**無功能改動**）
+
+- README 新增「方式三：從 Git tag 安裝」，並記下 **npm 12 起 `allow-git` / `allow-remote` 預設為 `none`** 這件事：
+  直接用 npm 裝 `github:` 會得到 `EALLOWGIT`，需要 `--allow-git=all`，或改裝 tag 的 tarball（`--allow-remote=all`）。
+- 這個坑是實測撞出來的，不是看文檔看來的：遠端 tag 安裝成功 → `version 0.2.1`、安裝後 `smoke --offline` 69/69、`extract-eval` 10/10。
+
 ## 0.2.1 — 2026-10-28
 
 ### 補（文檔與版本對齊；**無功能改動**）

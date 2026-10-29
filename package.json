@@ -1,6 +1,6 @@
 {
   "name": "dsh-web-watch",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "DSH 插件：藍色大肥魚的報箱（web-watch）—— 定時抓 feed / JSON、去重、落快照，產出三節 digest，並在到期時把摘要塞進指定會話",
   "keywords": [
     "dsh",
