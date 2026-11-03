@@ -39,8 +39,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DEFAULT_SCHEDULE, DEFAULT_SOURCES } from '../lib/state.mjs';
 import { SCHEDULE_MIRROR_NOTE, normalizeSources } from '../lib/engine/loader.mjs';
 import { buildDigest } from '../lib/engine/digest.mjs';
-import { runPull } from '../lib/engine/run.mjs';
-import { isInside } from '../lib/engine/store.mjs';
+import { dueSourceIds, runPull } from '../lib/engine/run.mjs';
+import { evaluateDue, retryDelayMs } from '../lib/engine/schedule.mjs';
+import { getSourceState, isInside } from '../lib/engine/store.mjs';
 import { extractMain } from '../lib/extract.mjs';
 import { READ_LIMITS, readPage, resetReadState } from '../lib/readpage.mjs';
 import { RESOLVERS, formatTable, runCases } from '../probe/safeurl-cases.mjs';
@@ -1004,6 +1005,125 @@ check(
   JSON.stringify(failRun.failed),
 );
 check('第一次失敗 ⇒ failStreak = 1', failRun.results[0]?.failStreak === 1, String(failRun.results[0]?.failStreak));
+
+/* ────────────────────── ⑤.6 失敗退避（2026-11-03 修） ────────────────────── */
+
+console.log('\n=== ⑤.6 退避：壞源不再每分鐘重試、全失敗不叫人 ===');
+
+check(
+  '退避階梯 1h → 4h → 8h → 24h（之後封頂）',
+  [1, 2, 3, 4, 9].map((n) => retryDelayMs(n) / 3_600_000).join(',') === '1,4,8,24,24',
+  [1, 2, 3, 4, 9].map((n) => `${n}:${retryDelayMs(n) / 3_600_000}h`).join(' '),
+);
+
+const backoffHome = mkdtempSync(join(tmpdir(), 'web-watch-smoke-backoff-'));
+const backoffSource = normalizeSources([
+  { id: 'dead-src', kind: 'rss', url: 'https://dead.example/feed.xml' },
+])[0];
+const t0 = new Date('2026-11-03T17:31:00+08:00');
+const deadFetch = async () => fakeResponse({ status: 500, type: 'text/plain' });
+const firstFail = await runPull({
+  homeDir: backoffHome,
+  sources: [backoffSource],
+  schedule: { ...DEFAULT_SCHEDULE },
+  now: t0,
+  resolve: OFFLINE_DNS,
+  fetchImpl: deadFetch,
+  log: () => {},
+});
+const bIndex = JSON.parse(readFileSync(join(backoffHome, 'index.json'), 'utf8'));
+const bState = bIndex.sources?.['dead-src'] || {};
+check(
+  '失敗一次 ⇒ state.nextRetryAt = 失敗時間 + 1h',
+  bState.nextRetryAt === new Date(t0.getTime() + 3_600_000).toISOString(),
+  String(bState.nextRetryAt),
+);
+check(
+  '本輪全失敗 ⇒ summary.allFailed = true（tick 據此不投遞）',
+  firstFail.allFailed === true,
+  `allFailed=${firstFail.allFailed} failed=${firstFail.counts.failedSources}/${firstFail.counts.rows}`,
+);
+check(
+  '全失敗的 digest 自己標明「未投遞」',
+  /未投遞/.test(readFileSync(join(backoffHome, firstFail.digestName), 'utf8')),
+  firstFail.digestName,
+);
+
+const decided1min = evaluateDue({
+  source: backoffSource,
+  state: getSourceState(bIndex, 'dead-src'),
+  schedule: { ...DEFAULT_SCHEDULE },
+  now: new Date(t0.getTime() + 60_000),
+});
+check(
+  '失敗 1 分鐘後判 backoff（修之前這裡是 never-run ⇒ due）',
+  decided1min.due === false && decided1min.reason === 'backoff',
+  `due=${decided1min.due} reason=${decided1min.reason}`,
+);
+check(
+  'backoff 的 nextAt 指向 nextRetryAt（不是 null）',
+  decided1min.nextAt instanceof Date && decided1min.nextAt.toISOString() === bState.nextRetryAt,
+  String(decided1min.nextAt),
+);
+
+const plan1min = await dueSourceIds({
+  homeDir: backoffHome,
+  sources: [backoffSource],
+  schedule: { ...DEFAULT_SCHEDULE },
+  now: new Date(t0.getTime() + 60_000),
+});
+check(
+  'tick 的 dueSourceIds 直接跳過壞源（一秒都不會再跑）',
+  plan1min.due.length === 0 && plan1min.skipped[0]?.nextAt === bState.nextRetryAt,
+  `due=${JSON.stringify(plan1min.due)} skipped=${JSON.stringify(plan1min.skipped)}`,
+);
+
+const decidedLater = evaluateDue({
+  source: backoffSource,
+  state: getSourceState(bIndex, 'dead-src'),
+  schedule: { ...DEFAULT_SCHEDULE },
+  now: new Date(t0.getTime() + 3_600_001),
+});
+check(
+  '過了退避窗口 ⇒ 重新 due（不是永久停掉）',
+  decidedLater.due === true,
+  `due=${decidedLater.due} reason=${decidedLater.reason}`,
+);
+
+const t1 = new Date(t0.getTime() + 3_600_001);
+await runPull({
+  homeDir: backoffHome,
+  sources: [backoffSource],
+  schedule: { ...DEFAULT_SCHEDULE },
+  now: t1,
+  resolve: OFFLINE_DNS,
+  fetchImpl: deadFetch,
+  log: () => {},
+});
+const bIndex2 = JSON.parse(readFileSync(join(backoffHome, 'index.json'), 'utf8'));
+check(
+  '連續失敗第二次 ⇒ 退避拉到 4h',
+  bIndex2.sources?.['dead-src']?.nextRetryAt === new Date(t1.getTime() + 14_400_000).toISOString(),
+  String(bIndex2.sources?.['dead-src']?.nextRetryAt),
+);
+
+const okRun = await runPull({
+  homeDir: backoffHome,
+  sources: [backoffSource],
+  schedule: { ...DEFAULT_SCHEDULE },
+  now: new Date(t1.getTime() + 14_400_001),
+  resolve: OFFLINE_DNS,
+  fetchImpl: async () => fakeResponse({ status: 200, type: 'application/rss+xml', body: rssBody }),
+  log: () => {},
+});
+const bIndex3 = JSON.parse(readFileSync(join(backoffHome, 'index.json'), 'utf8'));
+check(
+  '成功一次 ⇒ nextRetryAt 清空、failStreak 歸零',
+  bIndex3.sources?.['dead-src']?.nextRetryAt === null
+    && bIndex3.sources?.['dead-src']?.failStreak === 0
+    && okRun.allFailed === false,
+  `nextRetryAt=${String(bIndex3.sources?.['dead-src']?.nextRetryAt)} failStreak=${bIndex3.sources?.['dead-src']?.failStreak}`,
+);
 
 let fbRejected = null;
 try {
