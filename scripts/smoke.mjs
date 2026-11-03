@@ -1125,6 +1125,85 @@ check(
   `nextRetryAt=${String(bIndex3.sources?.['dead-src']?.nextRetryAt)} failStreak=${bIndex3.sources?.['dead-src']?.failStreak}`,
 );
 
+/* ── ⑤.7 tick 層：全失敗的一輪真的不會叫人（離線；靠 RFC 2606 的 .invalid 網域必解析失敗） ── */
+
+console.log('\n=== ⑤.7 tick 層：全失敗的一輪不投遞 ===');
+
+const tickHome = mkdtempSync(join(tmpdir(), 'web-watch-smoke-backoff-tick-'));
+mkdirSync(join(tickHome, 'web-watch'), { recursive: true });
+writeFileSync(
+  join(tickHome, 'web-watch', 'config.json'),
+  JSON.stringify(
+    { enabled: true, ...DEFAULT_SCHEDULE, targetSession: 'sess-smoke', ownerName: '你' },
+    null,
+    2,
+  ),
+  'utf8',
+);
+writeFileSync(
+  join(tickHome, 'web-watch', 'sources.json'),
+  JSON.stringify(
+    {
+      version: 1,
+      schedule: { ...DEFAULT_SCHEDULE },
+      sources: [{ id: 'dead-tick', kind: 'rss', url: 'https://dead.invalid/feed.xml' }],
+    },
+    null,
+    2,
+  ),
+  'utf8',
+);
+const followups = [];
+globalThis.setInterval = (fn, ms) => {
+  captured = { fn, ms };
+  return { unref() {}, ref() {} };
+};
+const tickMade = makeCtx(tickHome);
+tickMade.ctx.agents = {
+  get: () => ({
+    followup: async (msg) => {
+      followups.push(msg);
+    },
+  }),
+  list: () => [],
+};
+try {
+  mod.apply(tickMade.ctx, {});
+} finally {
+  globalThis.setInterval = realSetInterval;
+}
+let tickAllFail = null;
+let tickErr = null;
+try {
+  tickAllFail = await captured.fn();
+} catch (e) {
+  tickErr = e;
+}
+check(
+  'tick 全失敗的一輪：不拋錯、ran=true',
+  tickErr === null && tickAllFail?.ran === true,
+  tickErr ? String(tickErr?.stack || tickErr).slice(0, 300) : JSON.stringify(tickAllFail?.summary?.counts ?? null),
+);
+check(
+  'tick 全失敗的一輪：delivered.reason = all-failed',
+  tickAllFail?.delivered?.reason === 'all-failed',
+  JSON.stringify(tickAllFail?.delivered ?? null),
+);
+check('tick 全失敗的一輪：一次 followup 都沒發（不叫人）', followups.length === 0, `followup ${followups.length} 次`);
+check(
+  'tick 全失敗的一輪：digest 仍寫出且標明未投遞',
+  Boolean(tickAllFail?.summary?.digestPath)
+    && /未投遞/.test(readFileSync(tickAllFail.summary.digestPath, 'utf8')),
+  String(tickAllFail?.summary?.digestPath || ''),
+);
+for (const item of tickMade.state.effects) {
+  try {
+    if (typeof item.dispose === 'function') item.dispose();
+  } catch {
+    /* 忽略 */
+  }
+}
+
 let fbRejected = null;
 try {
   normalizeSources([{ id: 'fb-bad', kind: 'rss', url: 'https://ok.example/feed.xml', fallbacks: ['http://bad.example/feed.xml'] }]);

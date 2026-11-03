@@ -12,8 +12,9 @@
   - 新增 `reason: "backoff"`，`web_watch_status` 的 `dueReason` / `nextAt` 會顯示它。
 - **本輪沒有任何源成功時不投遞**（`summary.allFailed`）。digest 檔照常寫入 —— 出事時那是指紋，
   只是不再叫醒人；檔案頂部會註明「本輪 N 個源全部失敗 —— 只留作存證，未投遞」。
-- 新增 10 條離線煙測（`⑤.6`）：退避階梯、`nextRetryAt` 寫入與清空、`dueSourceIds` 跳過壞源、
-  全失敗標記與 digest 標註。`smoke --offline` 69 → 79。
+- 新增 14 條離線煙測（`⑤.6` 引擎層十條 + `⑤.7` tick 層四條）：退避階梯、`nextRetryAt` 寫入與清空、
+  `dueSourceIds` 跳過壞源、全失敗標記與 digest 標註；以及 `tick` 在零成功源時**確實一次 `followup`
+  都沒發出**（`delivered.reason = "all-failed"`）。`smoke --offline` 69 → 83。
 
 ## 0.2.2 — 2026-10-29
 
