@@ -43,7 +43,7 @@ import { dueSourceIds, runPull } from '../lib/engine/run.mjs';
 import { evaluateDue, retryDelayMs } from '../lib/engine/schedule.mjs';
 import { getSourceState, isInside } from '../lib/engine/store.mjs';
 import { extractMain } from '../lib/extract.mjs';
-import { READ_LIMITS, readPage, resetReadState } from '../lib/readpage.mjs';
+import { READ_LIMITS, incompleteWarnings, readPage, resetReadState } from '../lib/readpage.mjs';
 import { RESOLVERS, formatTable, runCases } from '../probe/safeurl-cases.mjs';
 
 const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -1135,6 +1135,72 @@ check(
   'UA 自報身分、不自稱瀏覽器（偽裝 UA 被 news.un.org 回 406，誠實 UA 回 200）',
   uaValue.length > 0 && !/mozilla|chrome|safari|webkit/i.test(uaValue) && /dsh-web-watch/.test(uaValue),
   uaValue || '(找不到 const UA)',
+);
+
+/* ── ⑤.66 不完整偵測（2026-11-04：euobserver 軟付費牆那次的對策） ── */
+
+console.log('\n=== ⑤.66 不完整偵測：warning 與 block ===');
+
+const wAll = incompleteWarnings({ text: '第一段寫了些東西。第二段寫到一半就', ratio: 0.34, tier: 'full', minRatio: 0.4 });
+check(
+  'ratio 偏低 + 尾句無標點 ⇒ 兩條 warning',
+  wAll.length === 2 && wAll.some((w) => w.includes('ratio')) && wAll.some((w) => w.includes('句末標點')),
+  JSON.stringify(wAll),
+);
+check(
+  '正常文章（有標點、ratio 高）⇒ 沒有 warning',
+  incompleteWarnings({ text: '這是一篇正常文章，結尾有標點。第二句也有。', ratio: 0.72, tier: 'full' }).length === 0,
+  '',
+);
+check(
+  '付費牆只認完整片語：單獨 subscribe 不算',
+  incompleteWarnings({ text: '點這裡 subscribe 電子報吧，然後還有更多內容。', ratio: 0.8, tier: 'full' }).length === 0,
+  '',
+);
+const wPaywall = incompleteWarnings({
+  text: '正文開頭。To continue reading, sign in to continue.',
+  ratio: 0.8,
+  tier: 'full',
+});
+check('命中完整片語 ⇒ 一條付費牆 warning', wPaywall.length === 1 && wPaywall[0].includes('付費牆'), JSON.stringify(wPaywall));
+check(
+  'tier 不是 full ⇒ 不報 ratio（partial 本來就短）',
+  incompleteWarnings({ text: '短。', ratio: 0.1, tier: 'partial' }).length === 0,
+  '',
+);
+
+// 整合：真的走一遍 readPage，確認 warn / block 兩種模式
+resetReadState();
+const incPara = '這是一段用來測試的正文內容，重複填充以達到 full 的門檻。';
+const incHtml =
+  '<html><head><title>不完整測試</title></head><body><article>'
+  + `<p>${incPara.repeat(10)}</p><p>${incPara.repeat(10)}</p><p>${incPara.repeat(10)}最後沒有標點</p>`
+  + '</article></body></html>';
+const incHome = mkdtempSync(join(tmpdir(), 'web-watch-smoke-incomplete-'));
+const incWarn = await readPage({
+  root: incHome,
+  url: 'https://inc-a.example/x',
+  fetchImpl: async () => fakeResponse({ status: 200, type: 'text/html; charset=utf-8', body: incHtml }),
+  resolve: OFFLINE_DNS,
+});
+check(
+  'warn 模式：照樣回內容，但附 warnings',
+  incWarn.ok === true
+    && Array.isArray(incWarn.warnings)
+    && incWarn.warnings.some((w) => w.includes('句末標點')),
+  `${incWarn.tier} ratio=${incWarn.ratio?.toFixed?.(2) ?? incWarn.ratio} ${JSON.stringify(incWarn.warnings ?? null)}`,
+);
+const incBlock = await readPage({
+  root: incHome,
+  url: 'https://inc-b.example/x',
+  fetchImpl: async () => fakeResponse({ status: 200, type: 'text/html; charset=utf-8', body: incHtml }),
+  resolve: OFFLINE_DNS,
+  incompleteMode: 'block',
+});
+check(
+  'block 模式：回 code=incomplete、不給內容',
+  incBlock.ok === false && incBlock.code === 'incomplete',
+  `${incBlock.code} ${incBlock.reason}`,
 );
 
 /* ── ⑤.7 tick 層：全失敗的一輪真的不會叫人（離線；靠 RFC 2606 的 .invalid 網域必解析失敗） ── */
