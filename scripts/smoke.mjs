@@ -1143,9 +1143,22 @@ console.log('\n=== ⑤.66 不完整偵測：warning 與 block ===');
 
 const wAll = incompleteWarnings({ text: '第一段寫了些東西。第二段寫到一半就', ratio: 0.34, tier: 'full', minRatio: 0.4 });
 check(
-  'ratio 偏低 + 尾句無標點 ⇒ 兩條 warning',
-  wAll.length === 2 && wAll.some((w) => w.includes('ratio')) && wAll.some((w) => w.includes('句末標點')),
+  'ratio 偏低 + 尾句無標點 ⇒ 一條 warning，且註明「疑似硬切」',
+  wAll.length === 1 && wAll[0].includes('ratio') && wAll[0].includes('疑似硬切'),
   JSON.stringify(wAll),
+);
+const wRatioOnly = incompleteWarnings({ text: 'ratio 低，但句子寫完了。', ratio: 0.34, tier: 'full' });
+check(
+  'ratio 低但尾句有標點 ⇒ 一條 warning，不提硬切',
+  wRatioOnly.length === 1 && wRatioOnly[0].includes('ratio') && !wRatioOnly[0].includes('硬切'),
+  JSON.stringify(wRatioOnly),
+);
+// ⭐ 這條是 2026-11-04 的誤報回歸測試：news.un.org 正文完整（1015 字）、ratio 0.416，
+//    只因為頁尾推廣句沒句點就跳警告 —— 而尾句現在不獨立報了。
+check(
+  'ratio 正常 + 尾句無標點 ⇒ 沒有 warning（news.un.org 的誤報回歸）',
+  incompleteWarnings({ text: '正文很完整，只有頁尾那句推廣文沒有句點', ratio: 0.42, tier: 'full' }).length === 0,
+  '',
 );
 check(
   '正常文章（有標點、ratio 高）⇒ 沒有 warning',
@@ -1170,12 +1183,15 @@ check(
 );
 
 // 整合：真的走一遍 readPage，確認 warn / block 兩種模式
+// （頁面要**有雜訊**才壓得出低 ratio —— 純正文的頁面 ratio 接近 1，不會觸發）
 resetReadState();
 const incPara = '這是一段用來測試的正文內容，重複填充以達到 full 的門檻。';
+const incNoise = `<nav>${'選單項目，'.repeat(400)}</nav>`;
 const incHtml =
-  '<html><head><title>不完整測試</title></head><body><article>'
-  + `<p>${incPara.repeat(10)}</p><p>${incPara.repeat(10)}</p><p>${incPara.repeat(10)}最後沒有標點</p>`
-  + '</article></body></html>';
+  '<html><head><title>不完整測試</title></head><body>'
+  + incNoise
+  + `<article><p>${incPara.repeat(12)}</p><p>${incPara.repeat(12)}</p><p>${incPara.repeat(6)}最後沒有標點</p></article>`
+  + '</body></html>';
 const incHome = mkdtempSync(join(tmpdir(), 'web-watch-smoke-incomplete-'));
 const incWarn = await readPage({
   root: incHome,
@@ -1184,10 +1200,10 @@ const incWarn = await readPage({
   resolve: OFFLINE_DNS,
 });
 check(
-  'warn 模式：照樣回內容，但附 warnings',
+  'warn 模式：照樣回內容，但附 ratio warning',
   incWarn.ok === true
     && Array.isArray(incWarn.warnings)
-    && incWarn.warnings.some((w) => w.includes('句末標點')),
+    && incWarn.warnings.some((w) => w.includes('ratio')),
   `${incWarn.tier} ratio=${incWarn.ratio?.toFixed?.(2) ?? incWarn.ratio} ${JSON.stringify(incWarn.warnings ?? null)}`,
 );
 const incBlock = await readPage({
