@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 0.2.4 - 2026-11-04
+
+### 修（UA-header）
+
+- **本輪沒有任何源成功時不投遞**（`summary.allFailed`）。digest 檔照常寫入 —— 出事時那是指紋，
+  只是不再叫醒人；檔案頂部會註明「本輪 N 個源全部失敗 —— 只留作存證，未投遞」。
+
+### 加（incompleteRatio **行爲有變**）
+  - 偵測「看起來完整其實不完整」的文章，兩個可調參數
+  - 起因：euobserver 有軟付費牆，tier=full、ratio 0.344、正文停在半句之後，呼叫端完全看不出來，還會被當成完整文章引用。
+  - 三條判據（只報 warning，不改 ok）：tier=full 且 ratio < incompleteRatio（預設 0.4）；正文最後三個字元沒有句末標點（抓硬切）；命中付費牆完整片語（不搜單獨的 subscribe——那會讓警告永遠亮著）。
+  - 兩個參數進 config，optional 帶預設，舊 config.json 升級不會壞：incompleteRatio（0-1，預設 0.4）、incompleteMode（warn=照回內容附 warnings / block=回 code:incomplete 且不落檔）。兩者都加進 NON_SCHEDULE_KEYS，所以 DSH 原生設置頁改了也會生效。
+  - 實作時撞到兩個判據邊界：尾句判據原本寫 slice(-40)，正常文章最後 40 字幾乎必有句號 ⇒ 永遠不響；而 euobserver 那篇其實停在句號後面，語法完整語意截斷，只有 ratio 抓得到。煙測就是這樣把它抓出來的。
+
 ## 0.2.3 — 2026-11-03
 
 ### 修（失敗退避；**行為有變**）

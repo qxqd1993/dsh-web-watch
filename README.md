@@ -9,7 +9,7 @@
 | 运行时  | Node.js ≥ 22，零第三方依赖（仅 `node:` 内建模块）                                  |
 | 宿主版本 | DSH ≥ `0.1.7-rc.1`                                                   |
 | 数据目录 | `%USERPROFILE%\.dsh\web-watch\`（macOS / Linux 为 `~/.dsh/web-watch/`） |
-| 当前版本 | `0.2.0`                                                             |
+| 当前版本 | `0.2.4`                                                             |
 | 许可证  | MIT                                                                  |
 
 ---
