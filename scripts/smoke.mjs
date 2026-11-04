@@ -1125,6 +1125,18 @@ check(
   `nextRetryAt=${String(bIndex3.sources?.['dead-src']?.nextRetryAt)} failStreak=${bIndex3.sources?.['dead-src']?.failStreak}`,
 );
 
+/* ── ⑤.65 UA 不許偽裝成瀏覽器（2026-11-04 實測：偽裝 UA 被 news.un.org 回 406） ── */
+
+console.log('\n=== ⑤.65 UA：不許改回偽裝的瀏覽器身分 ===');
+
+const readpageSrc = readFileSync(join(PLUGIN_DIR, 'lib', 'readpage.mjs'), 'utf8');
+const uaValue = (readpageSrc.match(/const UA =\s*'([^']*)'/) || [])[1] || '';
+check(
+  'UA 自報身分、不自稱瀏覽器（偽裝 UA 被 news.un.org 回 406，誠實 UA 回 200）',
+  uaValue.length > 0 && !/mozilla|chrome|safari|webkit/i.test(uaValue) && /dsh-web-watch/.test(uaValue),
+  uaValue || '(找不到 const UA)',
+);
+
 /* ── ⑤.7 tick 層：全失敗的一輪真的不會叫人（離線；靠 RFC 2606 的 .invalid 網域必解析失敗） ── */
 
 console.log('\n=== ⑤.7 tick 層：全失敗的一輪不投遞 ===');
